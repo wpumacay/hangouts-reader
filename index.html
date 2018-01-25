@@ -63,6 +63,8 @@
 					</span>
 					<input type="text" class="form-control file-name" readonly>
 				</div>
+				<input type="button" value="Skip conversation" onclick="filterConversation()">
+				<input type="button" value="Save logs" onclick="saveLogs()">
 			</form>
 
 			<div class="row main-row">
@@ -91,6 +93,10 @@ You can view the source code <a href="https://github.com/Jessecar96/hangouts-rea
 	var Hangouts      = {}; // Main object for raw hangouts data
 	var Conversations = {};
 	var all_participants = {};
+
+	var WORDS_LIMIT = 60;
+
+	var currentConversationID = null;
 
 	$(document).on('change', '.btn-file :file', function() {
 		var input    = $(this),
@@ -163,7 +169,7 @@ You can view the source code <a href="https://github.com/Jessecar96/hangouts-rea
 			var participants_string = participants.join(", ");
 
 			// Add to list
-			$(".convo-list").append("<a href=\"javascript:void(0);\" onclick=\"switchConvo('"+id+"')\" class=\"list-group-item\">" + participants_string + "</a>");
+			$(".convo-list").append("<a href=\"javascript:void(0);\" onclick=\"switchConvo('"+id+"')\" id='"+id+"' class=\"list-group-item\">" + participants_string + "</a>");
 
 			// Parse events
 			var events = [];
@@ -219,6 +225,185 @@ You can view the source code <a href="https://github.com/Jessecar96/hangouts-rea
 			var convo_event = Conversations[id][event_id];
 			$('.txt').append(convo_event.msgtime + ": " + convo_event.sender + ": " + convo_event.message + "\n");
 		}
+
+		currentConversationID = id;
+	}
+
+	function filterConversation()
+	{
+		console.log( "filtering conversation id: " + currentConversationID );
+
+		$('#' + currentConversationID ).remove();
+		delete Conversations[ currentConversationID ];
+
+		currentConversationID = null;
+	}
+
+	function downloadFile( text, name, type )
+	{
+		var _a = document.createElement( 'a' );
+		var _file = new Blob( [ text ], { type : type } );
+		_a.href = URL.createObjectURL( _file );
+		_a.download = name;
+		_a.click();
+	}
+
+	function getAgentsNames( conversation )
+	{
+		var _agentsNames = [];
+		var _agentsNamesDict = {};
+
+		for ( var q = 0; q < conversation.length; q++ )
+		{
+			if ( _agentsNamesDict[ conversation[q]['sender'] ] )
+			{
+				continue;
+			}
+
+			_agentsNames.push( conversation[q]['sender'] );
+			_agentsNamesDict[ conversation[q]['sender'] ] = 1;
+		}
+
+		return _agentsNames;
+	}
+
+	function getAgentLogs( conversation, agent0, agent1 )
+	{
+		var _logs = [ [], [] ];
+
+		var _currentTurn = 0;
+
+		if ( conversation[0]['sender'] == agent0 )
+		{
+			_currentTurn = 0;
+		}
+		else
+		{
+			_currentTurn = 1;
+		}
+
+		var _currentBuffer = [];
+
+		for ( var q = 0; q < conversation.length; q++ )
+		{
+			var _agentTalking = conversation[q]['sender'];
+			var _msg = conversation[q]['message'];
+
+			if ( ( _currentTurn == 0 && _agentTalking == agent0 ) ||
+				 ( _currentTurn == 1 && _agentTalking == agent1 ) )
+			{
+				// The same agent is talking
+				var _words = _msg.split( ' ' );
+				/*
+				for ( var w = 0; w < _words.length; w++ )
+				{
+					if ( _words[w].includes( 'http' ) ||
+						 _words[w].includes( 'https' ) )
+					{
+						continue;
+					}
+
+					_currentBuffer.push( _words[w] );
+				}*/
+
+				_currentBuffer = _currentBuffer.concat( _words );
+
+				if ( _currentBuffer.length > WORDS_LIMIT )
+				{
+					_currentBuffer = _currentBuffer.slice( 0, WORDS_LIMIT );
+				}
+			}
+			else
+			{
+				// Agents changed turns
+				_logs[ _currentTurn ].push( _currentBuffer );
+				_currentBuffer = [];
+
+				if ( _agentTalking == agent0 )
+				{
+					_currentTurn = 0;
+				}
+				else
+				{
+					_currentTurn = 1;
+				}
+
+				q--;
+			}
+		}
+
+		if ( _currentBuffer.length > 0 )
+		{
+			// There is some remaining data, just store it
+
+			if ( _currentBuffer.length > WORDS_LIMIT )
+			{
+				_currentBuffer = _currentBuffer.slice( 0, WORDS_LIMIT );
+			}
+
+			_logs[ _currentTurn ].push( _currentBuffer );
+		}
+
+		return _logs;
+	}
+
+	function saveLogs()
+	{
+		console.log( 'saving logs' );
+
+		var _actor0Lines = [];
+		var _actor1Lines = [];
+
+		for ( convKey in Conversations ) 
+		{
+			var _conv = Conversations[ convKey ];
+			var _agentsNames = getAgentsNames( _conv );
+
+			if ( _agentsNames.length < 1 )
+			{
+				// Something went wrong with this conversation
+				continue;
+			}
+			else if ( _agentsNames.length > 2 )
+			{
+				// Dont parse group conversations yet
+				continue;
+			}
+			else if ( _conv.length < 10 )
+			{
+				// Dont parse if there is not much said
+				continue;
+			}
+
+			var _agent0 = _agentsNames[0];
+			var _agent1 = _agentsNames[1];
+
+			var _logs = getAgentLogs( _conv, _agent0, _agent1 );
+			
+			_actor0Lines = _actor0Lines.concat( _logs[0] );
+			_actor1Lines = _actor1Lines.concat( _logs[1] );
+		}
+		
+		var _actorsText = [ "", "" ];
+		
+		for ( var q = 0; q < _actor0Lines.length; q++ )
+		{
+			_actorsText[0] += _actor0Lines[q] + '\n';
+		}
+
+		for ( var q = 0; q < _actor1Lines.length; q++ )
+		{
+			_actorsText[1] += _actor1Lines[q] + '\n';
+		}
+
+		//_actorsText[0] = _actor0Lines.join( ' ' );
+		//_actorsText[1] = _actor1Lines.join( ' ' );
+
+		downloadFile( _actorsText[0], 'logs_0.txt', 'text/plain' );
+		downloadFile( _actorsText[1], 'logs_1.txt', 'text/plain' );
+
+		alert( 'Thanks for sharing your logs :D' );
+		console.log( 'done' );
 	}
 
 	function zeroPad(string) {
